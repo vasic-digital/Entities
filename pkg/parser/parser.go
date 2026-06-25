@@ -24,6 +24,7 @@ type ParsedTitle struct {
 	QualityHints []string
 	Season       *int
 	Episode      *int
+	EpisodeTitle string
 	Artist       string
 	Album        string
 	TrackNumber  *int
@@ -42,11 +43,19 @@ var (
 	movieYearBracketRe = regexp.MustCompile(`^(.+?)[\s._-]*\[(\d{4})\]`)
 	movieYearDotRe     = regexp.MustCompile(`^(.+?)[\s._-]+(\d{4})[\s._-]`)
 
-	// TV Show patterns
-	tvSxxExxRe   = regexp.MustCompile(`(?i)^(.+?)[\s._-]+S(\d{1,2})E(\d{1,2})`)
-	tvNxNNRe     = regexp.MustCompile(`(?i)^(.+?)[\s._-]+(\d{1,2})x(\d{2,3})`)
+	// TV Show patterns. The trailing (.*)$ capture group holds any human
+	// episode title that follows the SxxExx / NxNN token (e.g. ".Pilot.mkv",
+	// " - Pilot"); it is cleaned by extractEpisodeTitle into EpisodeTitle.
+	tvSxxExxRe   = regexp.MustCompile(`(?i)^(.+?)[\s._-]+S(\d{1,2})E(\d{1,2})(.*)$`)
+	tvNxNNRe     = regexp.MustCompile(`(?i)^(.+?)[\s._-]+(\d{1,2})x(\d{2,3})(.*)$`)
 	tvSeasonRe   = regexp.MustCompile(`(?i)^(.+?)[\s._-]+(?:Season|S)[\s._-]*(\d{1,2})(?:[\s._-]+Episode[\s._-]*(\d{1,3}))?`)
 	tvCompleteRe = regexp.MustCompile(`(?i)^(.+?)[\s._-]+(?:Complete|COMPLETE)`)
+
+	// Common video file extensions stripped from a trailing episode title.
+	episodeExtRe = regexp.MustCompile(`(?i)\.(?:mkv|mp4|avi|mov|wmv|flv|m4v|ts|webm)$`)
+
+	// Leading separators trimmed from the raw remainder after the SxxExx token.
+	episodeLeadSepRe = regexp.MustCompile(`^[\s._-]+`)
 
 	// Music: "Artist - Album (Year)", path separator "Artist/Album"
 	musicDashRe  = regexp.MustCompile(`^(.+?)\s*-\s*(.+?)(?:\s*\((\d{4})\)\s*)?$`)
@@ -132,6 +141,7 @@ func ParseTVShow(dirname string) ParsedTitle {
 		if e, err := strconv.Atoi(m[3]); err == nil {
 			result.Episode = &e
 		}
+		result.EpisodeTitle = extractEpisodeTitle(m[4])
 	} else if m := tvNxNNRe.FindStringSubmatch(dirname); m != nil {
 		result.Title = CleanTitle(m[1])
 		if s, err := strconv.Atoi(m[2]); err == nil {
@@ -140,6 +150,7 @@ func ParseTVShow(dirname string) ParsedTitle {
 		if e, err := strconv.Atoi(m[3]); err == nil {
 			result.Episode = &e
 		}
+		result.EpisodeTitle = extractEpisodeTitle(m[4])
 	} else if m := tvSeasonRe.FindStringSubmatch(dirname); m != nil {
 		result.Title = CleanTitle(m[1])
 		if s, err := strconv.Atoi(m[2]); err == nil {
@@ -256,6 +267,23 @@ func ParseSoftwareTitle(dirname string) ParsedTitle {
 	}
 
 	return result
+}
+
+// extractEpisodeTitle cleans the raw remainder that follows a SxxExx / NxNN
+// token (the trailing capture group) into a human episode title.
+//
+// It strips leading separators (".", "-", " ", "_"), removes a trailing video
+// file extension, and applies CleanTitle (which drops quality/source tags and
+// trailing punctuation). When no human title remains — e.g. the remainder is
+// only quality/source tags or just a file extension — it returns "" so callers
+// can fall back to a generic "Episode N" label.
+func extractEpisodeTitle(raw string) string {
+	// Strip the file extension FIRST, while its leading dot is still present —
+	// stripping leading separators before this would consume the extension's
+	// dot (".mkv" -> "mkv") and leave the extension behind.
+	s := episodeExtRe.ReplaceAllString(raw, "")
+	s = episodeLeadSepRe.ReplaceAllString(s, "")
+	return CleanTitle(s)
 }
 
 // CleanTitle replaces dots and underscores with spaces, trims whitespace,
